@@ -1,0 +1,129 @@
+/*************************************************************
+  Project: Smart Level Monitor (Version 4.0 - Fixed Relay Switch)
+  Features: LCD I2C, 3-Stage Precise Relay Switching, Blynk IoT
+  Fix: Green relay will no longer stay ON infinitely.
+ *************************************************************/
+
+#define BLYNK_TEMPLATE_ID "YOUR_ID_HERE"
+#define BLYNK_TEMPLATE_NAME "YOUR_TEMPLATE_NAME_HERE"
+#define BLYNK_AUTH_TOKEN "YOUR_TOKEN_HERE"
+
+#include <WiFi.h>
+#include <WiFiClient.h>
+#include <BlynkSimpleEsp32.h>
+#include <LiquidCrystal_I2C.h>
+
+// --- PIN Configuration ---
+#define PIN_RELAY_RED    14  // Alarm / Full (Jarak <= 100cm)
+#define PIN_RELAY_ORANGE 13  // Was-was / Medium (Jarak 101cm - 300cm)
+#define PIN_RELAY_GREEN  12  // Aman / Low (Jarak 301cm - 600cm)
+#define PIN_TRIG         26
+#define PIN_ECHO         27
+
+// --- LCD Configuration ---
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// --- WiFi Configuration ---
+char auth[] = BLYNK_AUTH_TOKEN;
+char ssid[] = "YOUR_WIFI_NAME";
+char pass[] = "YOUR_WIFI_PASS";
+
+BlynkTimer timer;
+
+// --- Helper Functions ---
+void setRelays(int red, int orange, int green) {
+  digitalWrite(PIN_RELAY_RED, red);
+  digitalWrite(PIN_RELAY_ORANGE, orange);
+  digitalWrite(PIN_RELAY_GREEN, green);
+}
+
+void updateBlynkLEDs(int v3, int v4, int v5) {
+  Blynk.virtualWrite(V3, v3); // Red LED Widget
+  Blynk.virtualWrite(V4, v4); // Orange LED Widget
+  Blynk.virtualWrite(V5, v5); // Green LED Widget
+}
+
+// --- Main Logic Function ---
+void updateSystem() {
+  // 1. Read Ultrasonic Sensor
+  digitalWrite(PIN_TRIG, LOW);
+  delayMicroseconds(2);
+  digitalWrite(PIN_TRIG, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(PIN_TRIG, LOW);
+
+  long duration = pulseIn(PIN_ECHO, HIGH);
+  int distance = duration / 58; // Jarak mentah dalam cm
+
+  String levelStr = "";
+
+  // 2. Control Logic dengan Batas Jarak yang Jelas (Pasti Bergantian)
+  
+  // KONDISI MERAH (Air Penuh / Menyentuh Tanah)
+  if (distance > 0 && distance <= 100) {
+    levelStr = "Level: 100%";
+    setRelays(HIGH, LOW, LOW);  // Cuma Merah yang NYALA
+    updateBlynkLEDs(255, 0, 0); 
+  } 
+  // KONDISI ORANGE (Air Setengah / Was-was)
+  else if (distance > 100 && distance <= 300) {
+    levelStr = (distance <= 200) ? "Level: 75%" : "Level: 50%";
+    setRelays(LOW, HIGH, LOW);  // Cuma Orange yang NYALA
+    updateBlynkLEDs(0, 255, 0); 
+  } 
+  // KONDISI HIJAU (Air Sedikit / Aman di Bawah Tanah)
+  else if (distance > 300 && distance <= 600) {
+    levelStr = (distance <= 450) ? "Level: 25%" : "Level: 0%";
+    setRelays(LOW, LOW, HIGH);  // Cuma Hijau yang NYALA
+    updateBlynkLEDs(0, 0, 255); 
+  } 
+  // KONDISI DI LUAR JANGKAUAN (Wadah Kering Total / Sensor Gak Deteksi Air)
+  else {
+    levelStr = "Out of Range";
+    setRelays(LOW, LOW, LOW);   // MATI SEMUA demi keamanan
+    updateBlynkLEDs(0, 0, 0); 
+  }
+
+  // 3. Update LCD Display
+  lcd.setCursor(0, 0);
+  lcd.print("Dist: ");
+  lcd.print(distance);
+  lcd.print("cm      "); 
+
+  lcd.setCursor(0, 1);
+  lcd.print(levelStr);
+  lcd.print("      ");
+
+  // 4. Send metrics to Blynk Cloud
+  Blynk.virtualWrite(V1, distance);
+  Blynk.virtualWrite(V2, levelStr);
+}
+
+// --- Standard Arduino Setup ---
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(PIN_TRIG, OUTPUT);
+  pinMode(PIN_ECHO, INPUT);
+  pinMode(PIN_RELAY_RED, OUTPUT);
+  pinMode(PIN_RELAY_ORANGE, OUTPUT);
+  pinMode(PIN_RELAY_GREEN, OUTPUT);
+
+  // --- SAFETY LOCK ---
+  setRelays(LOW, LOW, LOW);
+  delay(100); 
+
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print("System Booting");
+
+  Blynk.begin(auth, ssid, pass);
+  timer.setInterval(500L, updateSystem);
+  lcd.clear();
+}
+
+void loop() {
+  Blynk.run(); 
+  timer.run(); 
+}
